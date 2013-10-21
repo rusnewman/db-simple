@@ -2,7 +2,7 @@
 /*!
  * PHP MySQL abstraction class 
  *
- * Copyright (c) 2011 Seb Skuse (seb@skuse-consulting.co.uk)
+ * Copyright (c) 2013 Seb Skuse (seb@skuse-consulting.co.uk)
  * All rights reserved.
  * Modifications made by Russell Newman & Phillip Whittlesea
  *
@@ -21,13 +21,15 @@
 
 class db extends mysqli {
 	
+	private $server = "";
+	private $username = "";
+	private $password = "";
+	private $database = "";
+	
 	// Holds an instance of the class
 	private static $instance;
 	
-	public $queries = array();
-	private $database;
-	
-	const VERSION = 1.4;
+	const VERSION = 1.5;
 	
 	const ERR_UNAVAILABLE = 6001;
 	const ERR_CONNECT_ERROR = 6002;
@@ -35,8 +37,9 @@ class db extends mysqli {
 	
 	// A private constructor; prevents direct creation of object
 	// A private constructor; prevents direct creation of object
-	private function __construct($server = "localhost", $username = "", $password = "", $schema = ""){
-		$this->database = $schema;
+	private function __construct($server = $this->server, $username = $this->username, $password = $this->password, $database = $this->database) {
+		
+		$this->database = $database;
 		
 		// Prevents mysql sock warnings. I prefer to throw exception as below.
 		@parent::__construct($server, $username, $password, $schema);
@@ -44,7 +47,7 @@ class db extends mysqli {
 		if(!@parent::ping()) throw new Exception("Database server unavailable", self::ERR_UNAVAILABLE);
 	}
 	
-	public static function singleton($server = null, $username = null, $password = null, $schema = null) {
+	public static function singleton($server = $this->server, $username = $this->username, $password = $this->password, $database = $this->database) {
 		if (!isset(self::$instance)) {
 			$c = __CLASS__;
 			self::$instance = new $c($server, $username, $password, $schema);
@@ -69,14 +72,6 @@ class db extends mysqli {
 	public function rollback() {
 		parent::rollback();
 		$this->autocommit(true);
-	}
-	
-	public function getSQL(){
-		return end($this->queries);
-	}
-	
-	public function run(){
-		return $this->runBatch();
 	}
 
 	// These functions are all custom implementations.
@@ -128,9 +123,7 @@ class db extends mysqli {
 		}
 		
 		// Push the query to the class array queries.
-		$this->queries[] = "SELECT {$fieldsList} FROM `{$tablesList}` {$conditionsList} {$additionals}";
-		
-		return $this;
+		return $this->query("SELECT {$fieldsList} FROM `{$tablesList}` {$conditionsList} {$additionals}");
 	}
 
 	/**
@@ -165,9 +158,7 @@ class db extends mysqli {
 		}
 		
 		// Format query, append additionals and push to query list
-		$this->queries[] = "INSERT INTO `{$this->database}`.`{$table}` ({$fieldsList}) VALUES ({$valuesList}) {$additionals};";
-		
-		return $this;
+		return $this->query("INSERT INTO `{$this->database}`.`{$table}` ({$fieldsList}) VALUES ({$valuesList}) {$additionals};");
 	}
 
 
@@ -200,9 +191,7 @@ class db extends mysqli {
 		}
 		
 		// Format query, append additionals and push to query list
-		$this->queries[] = "UPDATE `{$this->database}`.`{$table}` SET {$fieldsList} WHERE {$conditionsList} {$additionals};";
-		
-		return $this;
+		return $this->query("UPDATE `{$this->database}`.`{$table}` SET {$fieldsList} WHERE {$conditionsList} {$additionals};");
 	}
 
 
@@ -228,59 +217,35 @@ class db extends mysqli {
 		}
 		
 		// Push the query to the class array queries.
-		$this->queries[] = "DELETE FROM `{$this->database}`.`{$table}` WHERE {$conditionsList} {$additionals};";
-		
-		return $this;
+		return $this->query("DELETE FROM `{$this->database}`.`{$table}` WHERE {$conditionsList} {$additionals};");
 	}
 	
 	// Accepts a raw query and returns the first row of the results (i.e. a 2D array). Handy for logins, IDs, etc.
 	public function oneRow($query) {
-		$out = $this->single($query);
+		$out = $this->query($query);
 		if(!empty($out)) return $out[0];
 		return null;
 	}
 	
-	public function single($query){
-		$result = parent::query($query);
+	public function query($query) {
+	
+		$out = array();
+		
+		// Run the query.
+		$result = parent::query($query, MYSQLI_USE_RESULT);
 		if($this->error) throw new exception($this->error, $this->errno); 
 
-		$out = array();
-		if(is_bool($result)) {
-				$out[] = "";
+		// If $result is false, the query has failed.
+		// Append the results into a 3d array in $out.
+		if($result === false) {
+			throw new exception("There was an error in your query.");
 		} else {
-			while($row = $result->fetch_assoc()) $out[] = $row;
-		}
-		return $out;
-	}
-	
-	// Add raw SQL to the query queue.
-	public function queuedQuery($query) {
-		$this->queries[] = $query;
-		return $query;
-	}
-	
-	public function runBatch(){
-		$out = array();
-		// Ping the server and re-establish the connection if it has been dropped.
-		parent::ping();
-		
-		// For each query...
-		foreach($this->queries as $queryId => $query){
-			// Run the query.
-			$res = parent::query($query, MYSQLI_USE_RESULT);
-			if($this->error) throw new exception($this->error, $this->errno); 
-
-			// Append the results into a 3d array in $out.
-			if(is_bool($res) == true) {
-				$out[$queryId] = "";
-			} else {
-				while($row = $res->fetch_assoc()) $out[$queryId][] = $row;
-			}
+			while($row = $result->fetch_object()) $out[] = $row;
 		}
 		
-		$this->queries = array();
+		// Free the memory associated with the result object.
+		$result->free();
 		
-		// Return the output to the caller.
 		return $out;
-	} 
+	}
 }
